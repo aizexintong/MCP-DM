@@ -1,0 +1,35 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# 数据目录（绝不提交）
+data/
+*.log
+logs/
+
+# 构建产物
+bin-*
+*.exe
+*.dll
+
+# 本地配置
+.cargo/
+.env
+*.local
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+*~
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# PostgreSQL 数据
+pg/
+*.db
+*.sqlite
+*.sqlite3

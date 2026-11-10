@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#FAF4EF">
+  <title>MCP-DM · Memory Garden</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+  <script defer src="/static/vendor/marked.min.js"></script>
+  <script defer src="/static/js/api.js"></script>
+  <script defer src="/static/js/app.js"></script>
+</head>
+<body>
+  <div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <a class="brand" href="/">
+        <span class="brand-mark">M</span>
+        <span class="brand-copy"><b>MCP<span>·</span>DM</b><small>MEMORY GARDEN</small></span>
+      </a>
+      <div class="workspace-card">
+        <div class="workspace-avatar">记</div>
+        <div class="workspace-copy"><b>个人知识库</b><small>长期记忆 · 持续生长</small></div>
+        <span class="workspace-state"></span>
+      </div>
+      <div class="nav-label">探索</div>
+      <nav class="primary-nav">
+        <a href="/" data-route="home" class="nav-item"><span class="nav-icon">⌂</span><span>知识总览</span></a>
+        <a href="/timeline" data-route="timeline" class="nav-item"><span class="nav-icon">◷</span><span>时间脉络</span></a>
+        <a href="/search" data-route="search" class="nav-item"><span class="nav-icon">⌕</span><span>检索记忆</span></a>
+      </nav>
+      <div class="side-section-head"><span class="nav-label">知识分类</span><button class="icon-button small" id="add-category" title="新建分类">＋</button></div>
+      <div id="category-tree" class="category-tree"><div class="skeleton-line"></div><div class="skeleton-line short"></div></div>
+      <div class="sidebar-bottom">
+        <div class="storage-card"><span class="storage-dot"></span><span><b>自托管知识库</b><small>你的数据，由你掌握</small></span></div>
+        <button class="nav-item settings-item" id="refresh-data"><span class="nav-icon">↻</span><span>刷新索引</span></button>
+        <div class="sidebar-foot">MCP-DM <span>静默记录，随时检索</span></div>
+      </div>
+    </aside>
+    <main class="main-area">
+      <header class="topbar">
+        <button class="icon-button mobile-menu" id="menu-toggle" aria-label="打开导航">☰</button>
+        <div class="breadcrumbs" id="breadcrumbs"><span>知识库</span><i>/</i><b>知识总览</b></div>
+        <div class="top-actions">
+          <button class="search-trigger" id="search-trigger"><span>⌕</span><span>搜索任何记忆</span><kbd>⌘ K</kbd></button>
+          <button class="icon-button theme-button" id="theme-toggle" title="切换主题">◐</button>
+          <a class="avatar-button github-link" href="https://github.com/aizexintong/MCP-DM" target="_blank" rel="noopener" title="查看源代码仓库" aria-label="GitHub 仓库">
+            <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          </a>
+        </div>
+      </header>
+      <section class="page-content" id="page-content"><div class="loading-state">正在整理你的知识脉络…</div></section>
+    </main>
+  </div>
+  <div class="overlay" id="overlay"></div>
+
+  <dialog class="editor-dialog" id="editor-dialog">
+    <form id="entry-form" method="dialog">
+      <div class="dialog-head"><div><span class="eyebrow">MEMORY / ENTRY</span><h2 id="editor-title">记录一段新记忆</h2></div><button type="button" class="icon-button" data-close-dialog>×</button></div>
+      <input type="hidden" id="entry-id">
+      <div class="form-grid">
+        <label class="field full"><span>标题</span><input id="entry-title" required maxlength="240" placeholder="用一句话描述这条知识"></label>
+        <label class="field full"><span>所属分类路径</span><input id="entry-category" required placeholder="例如 mc-server.changelog"></label>
+        <label class="field"><span>内容状态</span><select id="entry-state"><option value="current">当前有效</option><option value="archived">已归档</option><option value="obsolete">已失效</option></select></label>
+        <label class="field"><span>标签</span><input id="entry-tags" placeholder="标签一, 标签二"></label>
+        <label class="field full"><span>起因 / 背景</span><textarea id="entry-cause" rows="3" placeholder="为什么需要记录这件事？"></textarea></label>
+        <label class="field full"><span>结果 / 结论</span><textarea id="entry-effect" rows="3" placeholder="最终确认了什么？产生了什么影响？"></textarea></label>
+        <label class="field full"><span>正文 · Markdown</span><textarea id="entry-body" rows="11" placeholder="记录过程、细节、配置、命令与后续线索…"></textarea></label>
+      </div>
+      <div class="dialog-foot"><span class="save-hint">以结构化上下文保存，供未来检索</span><div><button type="button" class="button ghost" data-close-dialog>取消</button><button type="submit" class="button primary" id="save-entry">保存记录</button></div></div>
+    </form>
+  </dialog>
+
+  <dialog class="search-dialog" id="search-dialog">
+    <div class="search-dialog-inner">
+      <div class="global-search-input"><span>⌕</span><input id="global-search" placeholder="检索标题、起因、结果与正文…" autocomplete="off"><kbd>ESC</kbd></div>
+      <div class="search-hint">输入关键词，按 Enter 查看完整结果</div>
+      <div id="quick-results"></div>
+    </div>
+  </dialog>
+
+  <!-- 新建分类（替代 prompt） -->
+  <dialog class="mini-dialog" id="category-dialog">
+    <form id="category-form" method="dialog">
+      <div class="dialog-head">
+        <div><span class="eyebrow">NEW CATEGORY</span><h2>新建分类</h2></div>
+        <button type="button" class="icon-button" data-close-mini>×</button>
+      </div>
+      <div class="form-grid">
+        <label class="field full">
+          <span>分类路径</span>
+          <input id="category-path" required placeholder="例如 mc-server.新子类">
+          <small class="field-hint">点号分层，可用已有分类作为前缀</small>
+        </label>
+        <label class="field full">
+          <span>显示名称</span>
+          <input id="category-label" required placeholder="例如 新子类">
+        </label>
+      </div>
+      <div class="dialog-foot">
+        <span class="save-hint" id="category-preview"></span>
+        <div>
+          <button type="button" class="button ghost" data-close-mini>取消</button>
+          <button type="submit" class="button primary">创建分类</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 确认框（替代 confirm） -->
+  <dialog class="mini-dialog" id="confirm-dialog">
+    <div class="dialog-head">
+      <div><span class="eyebrow" id="confirm-eyebrow">CONFIRM</span><h2 id="confirm-title">确认操作</h2></div>
+      <button type="button" class="icon-button" data-close-mini>×</button>
+    </div>
+    <p class="confirm-message" id="confirm-message"></p>
+    <div class="dialog-foot">
+      <span class="save-hint">此操作不可撤销</span>
+      <div>
+        <button type="button" class="button ghost" data-close-mini>取消</button>
+        <button type="button" class="button danger" id="confirm-ok">确认</button>
+      </div>
+    </div>
+  </dialog>
+  <div class="toast-region" id="toast-region" aria-live="polite"></div>
+</body>
+</html>

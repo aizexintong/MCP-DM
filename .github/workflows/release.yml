@@ -1,0 +1,241 @@
+name: Release
+
+# 只在打 tag 时构建发布。CI 不写仓库——版本号由本地 scripts/release.sh 递增，
+# 这样提交历史里只有作者本人，不会出现 bot 或半成品提交。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要构建的 tag（如 v1.0.1）'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  BIN_NAME: memory-kb
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: v
+        run: |
+          set -euo pipefail
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            VER=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+            TAG="v$VER"
+          fi
+          case "$TAG" in
+            v*) VERSION="${TAG#v}" ;;
+            *)  VERSION="$TAG"; TAG="v$TAG" ;;
+          esac
+          echo "版本: $VERSION  tag: $TAG"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+
+      - name: Verify Cargo.toml matches tag
+        run: |
+          set -euo pipefail
+          CV=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          if [ "$CV" != "${{ steps.v.outputs.version }}" ]; then
+            echo "::error::Cargo.toml ($CV) 与 tag (${{ steps.v.outputs.version }}) 不一致"
+            echo "先跑 scripts/release.sh 递增版本并提交，再打 tag"
+            exit 1
+          fi
+
+  build:
+    needs: meta
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            artifact: linux-amd64
+            ext: ""
+          - target: x86_64-pc-windows-gnu
+            artifact: windows-amd64
+            ext: ".exe"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install cross toolchain
+        run: |
+          sudo apt-get update -qq
+          if [ "${{ matrix.target }}" = "x86_64-pc-windows-gnu" ]; then
+            sudo apt-get install -y -qq mingw-w64
+            mkdir -p .cargo
+            printf '%s\n' \
+              '[target.x86_64-pc-windows-gnu]' \
+              'linker = "x86_64-w64-mingw32-gcc"' \
+              'ar = "x86_64-w64-mingw32-ar"' \
+              > .cargo/config.toml
+            cat .cargo/config.toml
+          else
+            sudo apt-get install -y -qq musl-tools
+            echo "CC_x86_64_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
+          fi
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ matrix.target }}-
+
+      - name: Test
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: cargo test --release --target ${{ matrix.target }}
+
+      - name: Build
+        run: |
+          set -o pipefail
+          cargo build --release --target ${{ matrix.target }} 2>&1 | tee build.log
+          if grep -A2 "^warning:" build.log | grep -qE "^\s+--> src/"; then
+            echo "::error::项目源码存在警告"
+            grep -A2 "^warning:" build.log | grep -B2 -E "^\s+--> src/" || true
+            exit 1
+          fi
+          echo "构建完成，项目源码无警告"
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          OUT="${BIN_NAME}-${{ matrix.artifact }}${{ matrix.ext }}"
+          cp "target/${{ matrix.target }}/release/${BIN_NAME}${{ matrix.ext }}" "$OUT"
+          chmod +x "$OUT" || true
+          ls -lh "$OUT"
+
+      - name: Verify static linking
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          if ldd "memory-kb-linux-amd64" 2>&1 | grep -q "not a dynamic executable"; then
+            echo "静态链接 OK"
+          else
+            echo "::error::不是静态链接"
+            ldd "memory-kb-linux-amd64" || true
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ env.BIN_NAME }}-${{ matrix.artifact }}${{ matrix.ext }}
+          retention-days: 7
+
+  release:
+    needs: [meta, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List
+        run: ls -lh dist/
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.meta.outputs.tag }}
+          name: ${{ needs.meta.outputs.tag }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: dist/*
+          body: |
+            ## 安装
+
+            Linux（静态，无依赖）
+            ```bash
+            chmod +x memory-kb-linux-amd64
+            ./memory-kb-linux-amd64
+            ```
+
+            Windows
+            ```powershell
+            .\memory-kb-windows-amd64.exe
+            ```
+
+            首次启动自动在 `./data/` 初始化数据库，无需预装 PostgreSQL。
+
+            ## 默认只监听本机
+
+            启动后仅 `127.0.0.1` 可访问。局域网使用请指定 `BIND`：
+
+            ```bash
+            BIND=10.0.0.0/8 ./memory-kb-linux-amd64    # 仅内网 A 段
+            BIND=10.0.1.123 ./memory-kb-linux-amd64    # 仅指定网卡
+            BIND=0.0.0.0/0  ./memory-kb-linux-amd64    # 不限制（谨慎）
+            ```
+
+            | 写法 | 绑定 | 允许来源 |
+            |---|---|---|
+            | `127.0.0.1`（默认） | 本机回环 | 仅本机 |
+            | `10.0.0.1` | 该网卡 | 该网卡可达者 |
+            | `10.0.0.0/8` | 0.0.0.0 | 仅 10.0.0.0/8 |
+            | `0.0.0.0/0` | 0.0.0.0 | 不限制 |
+
+            ## 端点
+
+            ```
+            网页  http://127.0.0.1:8767
+            MCP   http://127.0.0.1:8765/mcp
+            ```
+
+            ## MCP 接入
+
+            ```json
+            {
+              "mcpServers": {
+                "memory": { "url": "http://127.0.0.1:8765/mcp" }
+              }
+            }
+            ```
+
+            工具与安装细节见 AGENTS.md。
+
+            ## macOS
+
+            不提供预编译产物。macOS 用户请从源码构建。
+
+  verify:
+    needs: [meta, release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.meta.outputs.tag }}"
+          gh release view "$TAG" --repo "${{ github.repository }}" \
+            --json assets --jq '.assets[] | "\(.name)  \(.size) bytes"'
+          N=$(gh release view "$TAG" --repo "${{ github.repository }}" \
+            --json assets --jq '.assets | length')
+          echo "资产数量: $N"
+          [ "$N" -ge 2 ] || { echo "::error::资产不足 2 个"; exit 1; }
