@@ -1,0 +1,34 @@
+[package]
+name = "memory-kb"
+version = "1.0.1"
+edition = "2021"
+description = "知识库：Actix-web + PostgreSQL(embedded)"
+license = "MIT"
+
+[[bin]]
+name = "memory-kb"
+path = "src/main.rs"
+
+[dependencies]
+actix-web = "4"
+actix-files = "0.6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", features = ["macros", "runtime-tokio-rustls", "postgres", "chrono", "uuid", "migrate", "json"] }
+postgresql_embedded = { version = "0.22", default-features = false, features = ["blocking", "theseus", "tls-rustls-ring"] }
+tokio = { version = "1", features = ["full"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+regex = "1"
+lazy_static = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rmcp = { version = "3.9.0", features = ["server", "transport-streamable-http-server"] }
+axum = "0.8.9"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
