@@ -122,7 +122,9 @@ claude mcp add --transport http memory http://127.0.0.1:8765/mcp
 
 ### 3.3 DSH（DeepSeek Harness）
 
-在 profile 的 `cordis.patch.yml` 加：
+**最简单的方式**：只在 profile 顶层挂 MCP 客户端，不需要写预设。
+
+`~/.dsh/profiles/web/cordis.patch.yml`：
 
 ```yaml
 - id: mcp-memory
@@ -138,6 +140,147 @@ claude mcp add --transport http memory http://127.0.0.1:8765/mcp
       initialDelayMs: 1000
       maxAttempts: 20
 ```
+
+**进阶：做成 Agent 预设**，把 MCP 和「开场必查」的规则绑在一起，新会话自动生效。
+下面这份是可直接用的完整配置，语法坑都在注释里标了：
+
+```yaml
+- insert:
+    - id: preset-memory
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: memory-first              # 会话里保存的预设标识
+        name: 记忆库优先               # 界面上显示的名字
+        description: 每次开场先查知识库
+        order: 0                      # 排在其他预设前面
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: You are a coding agent powered by the {{model}} model.
+              suffix: |
+                ## 知识库使用规则（强制）
+                开场必做：任何新任务前先调 mcp__memory__mem_search。
+                1. 开场必查，不查等于重复劳动
+                2. status: no_seed 就问人，不要编
+                3. 先看 state：current 采信，archived 只说明当时状态，obsolete 不要引用
+          - id: agent-instructions
+            name: '@deepseek-ai/dsh-agent-instructions'
+            config:
+              maxBytes: 65536
+          - id: mcp-memory-server
+            name: '@deepseek-ai/dsh-mcp-client'
+            config:
+              serverName: memory
+              transport: streamable-http
+              url: http://127.0.0.1:8765/mcp
+              failOnStartupError: false
+          - id: tool-bash
+            name: '@deepseek-ai/dsh-tool-bash'
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+          - id: tool-jobs
+            name: '@deepseek-ai/dsh-tool-jobs'
+          - id: skill-filesystem
+            name: '@deepseek-ai/dsh-skill-filesystem'
+          - id: tool-skill
+            name: '@deepseek-ai/dsh-tool-skill'
+
+          # 分组插件必须这么写，三处细节缺一不可
+          - id: planning
+            name: cordis:group           # 固定字符串，不是包名
+            group: true                   # 必须
+            isolate:
+              planMode: true              # 声明要隔离的服务
+            config:                       # 子插件放这里，是数组
+              - id: plan-mode
+                name: '@deepseek-ai/dsh-plan-mode'
+
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+              - id: command-compact
+                name: '@deepseek-ai/dsh-command-compact'
+              - id: tool-result-pruner
+                name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+                config:
+                  thresholdChars: 8192
+
+          - id: delegation
+            name: cordis:group
+            group: true
+            isolate:
+              workflowEngine: true
+            config:
+              - id: tool-subagent-control
+                name: '@deepseek-ai/dsh-tool-subagent-control'
+              - id: tool-subagent-list-agents
+                name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+              - id: tool-subagent
+                name: '@deepseek-ai/dsh-tool-subagent'
+                config:
+                  provider: spawn
+                  toolName: subagent
+                  backgroundMode: continuable
+              - id: tool-subagent-fork
+                name: '@deepseek-ai/dsh-tool-subagent'
+                config:
+                  provider: fork
+                  toolName: subagent_fork
+                  backgroundMode: continuable
+
+          - id: tool-ask-user
+            name: '@deepseek-ai/dsh-tool-ask-user'
+          - id: tool-todo
+            name: '@deepseek-ai/dsh-tool-todo'
+            config:
+              allowParallelInProgress: true   # 必填，漏了会启动失败
+          - id: tool-web
+            name: '@deepseek-ai/dsh-tool-web'
+          - id: present
+            name: '@deepseek-ai/dsh-tool-present'
+```
+
+#### 预设加载失败的三种典型报错
+
+| 报错 | 原因 | 修法 |
+|---|---|---|
+| `X (cordis:group): Cannot read properties of undefined (reading 'map')` | 分组插件写成了 `plugins:` 或用了不存在的包名 | 用 `name: cordis:group` + `group: true` + `config:` 数组 |
+| `tool-todo: invalid config: $.allowParallelInProgress missing required value` | 缺必填项 | 加 `allowParallelInProgress: true` |
+| `Cannot find module '@deepseek-ai/dsh-xxx'` | 包名写错 | 对照 `node_modules/@deepseek-ai/dsh-web-app/presets/standard.patch.yml` |
+
+**最可靠的办法**：打开官方标准预设逐项对照
+
+```bash
+cat node_modules/@deepseek-ai/dsh-web-app/presets/standard.patch.yml
+```
+
+#### 另一个会挡住预设加载的问题
+
+如果启动时看到：
+
+```
+dsh: warning: 1 entry did not activate
+image-offload (@deepseek-ai/dsh-compaction-image-offload): Error:
+session message projection "image/offload" is already registered
+```
+
+说明有别的插件抢先注册了 `image/offload` 投影。查：
+
+```bash
+grep -rn "image/offload" ~/.dsh/profiles/*/node_modules/*/index.js
+```
+
+找到那个重复注册的插件，把它的 `registerMessageProjection` 调用删掉——投影由核心提供，
+它只负责 append 事件就够了。`try/catch` 不管用，因为它先注册、核心后注册时炸的是核心。
 
 ### 3.4 验证连接
 
@@ -493,3 +636,137 @@ nssm start MCP-DM
 - [ ] `data/` 目录已加入备份计划
 
 全部通过 = 装好了。
+
+---
+
+## 十一、搬家清单（换机器 / 迁移部署）
+
+数据能直接搬，但有 **4 处配置写死了绝对路径或 IP**，必须一起改，漏一个就起不来。
+
+### 1. 打包数据
+
+```bash
+systemctl stop mcp-dm
+tar -czf mcp-dm-data.tar.gz -C /data/projects/MCP-DM data
+```
+
+`data/` 里就是全部数据（含 PostgreSQL 集群），不需要 `pg_dump`。
+
+### 2. 新机器解开
+
+```bash
+mkdir -p /opt/mcp-dm
+tar -xzf mcp-dm-data.tar.gz -C /opt/mcp-dm     # 得到 /opt/mcp-dm/data
+cp MCP-DM-linux-amd64 /opt/mcp-dm/MCP-DM
+chmod +x /opt/mcp-dm/MCP-DM
+chown -R YOUR_USER /opt/mcp-dm
+```
+
+> **不能用 root 跑**。PostgreSQL 直接拒绝：`initdb: cannot be run as root`。
+
+### 3. 改 PG 的 socket 路径（最容易漏）
+
+`data/pg/postgresql.conf` 里这一行是**绝对路径**：
+
+```conf
+unix_socket_directories = '/data/projects/MCP-DM/data/pg/run'
+```
+
+换成新路径：
+
+```bash
+sed -i 's|/data/projects/MCP-DM|/opt/mcp-dm|g' /opt/mcp-dm/data/pg/postgresql.conf
+```
+
+漏了这行的症状：服务卡在「启动 PostgreSQL」，或报 socket 不存在。
+
+### 4. 环境变量
+
+| 变量 | 典型值 | 说明 |
+|---|---|---|
+| `BIND` | `10.0.0.0/8` | **默认只有 127.0.0.1**，局域网要显式放开 |
+| `DATA_DIR` | `/opt/mcp-dm/data` | 改了要同步第 3 步 |
+| `WEB_PORT` | `8767` | 网页端口 |
+| `MCP_PORT` | `8765` | MCP 端口 |
+| `PG_PORT` | `55432` | 内嵌 PG（仅 socket） |
+
+### 5. systemd 单元
+
+```ini
+# /etc/systemd/system/mcp-dm.service
+[Unit]
+Description=MCP-DM 文档记忆系统
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USER
+Group=YOUR_GROUP
+WorkingDirectory=/opt/mcp-dm
+
+Environment=BIND=10.0.0.0/8
+Environment=DATA_DIR=/opt/mcp-dm/data
+Environment=WEB_PORT=8767
+Environment=MCP_PORT=8765
+Environment=PG_PORT=55432
+Environment=RUST_LOG=info,actix_web=warn
+
+ExecStart=/opt/mcp-dm/MCP-DM
+
+Restart=always
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=30
+StandardOutput=append:/opt/mcp-dm/logs/mcp-dm.log
+StandardError=append:/opt/mcp-dm/logs/mcp-dm.log
+
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+mkdir -p /opt/mcp-dm/logs && chown -R YOUR_USER /opt/mcp-dm/logs
+systemctl daemon-reload && systemctl enable --now mcp-dm
+```
+
+### 6. 客户端要改的地址
+
+| 客户端 | 改什么 |
+|---|---|
+| Claude Desktop / Cursor | MCP 配置里的 `url` |
+| Claude Code | `claude mcp remove memory` 再 `add` |
+| DSH 顶层 `mcp-memory` | `cordis.patch.yml` 的 `url` |
+| DSH 预设 `mcp-memory-server` | 预设里的 `url`（**两处都要改**） |
+
+### 7. 迁移后验证
+
+```bash
+systemctl is-active mcp-dm
+grep -E "MCP-DM v|监听地址" /opt/mcp-dm/logs/mcp-dm.log | tail -2
+
+curl -s http://127.0.0.1:8767/api/stats
+# 期望 {"cats":26,"entries":75,"links":43,"marked":2}
+
+curl -s -o /dev/null -w "%{http_code}\n" http://<新IP>:8767/api/stats
+# 期望 200
+
+curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:8765/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize",
+       "params":{"protocolVersion":"2025-06-18","capabilities":{},
+                 "clientInfo":{"name":"t","version":"1"}}}'
+# 期望 200
+```
+
+### 搬家最容易踩的四个坑
+
+| 坑 | 症状 | 原因 |
+|---|---|---|
+| 用 root 启动 | 卡在「初始化 PostgreSQL」 | `initdb` 拒绝 root |
+| 没改 `unix_socket_directories` | 卡在「启动 PostgreSQL」 | PG 配置写死绝对路径 |
+| 没设 `BIND` | 本机能开，别的机器 403 或连不上 | 默认只绑 127.0.0.1 |
+| 旧进程占端口 | 启动失败 `address in use` | 先 `ps aux \| grep MCP-DM` 清干净 |
+
