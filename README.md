@@ -26,18 +26,18 @@
 
 | 平台 | 文件 |
 |---|---|
-| Linux x86_64（静态，无依赖） | `memory-kb-linux-amd64` |
-| Windows x86_64 | `memory-kb-windows-amd64.exe` |
+| Linux x86_64（静态，无依赖） | `MCP-DM-linux-amd64` |
+| Windows x86_64 | `MCP-DM-windows-amd64.exe` |
 
 ### 运行
 
 ```bash
-chmod +x memory-kb-linux-amd64
-./memory-kb-linux-amd64
+chmod +x MCP-DM-linux-amd64
+./MCP-DM-linux-amd64
 ```
 
 ```powershell
-.\memory-kb-windows-amd64.exe
+.\MCP-DM-windows-amd64.exe
 ```
 
 首次启动自动在 `./data/` 初始化数据库，**无需预装 PostgreSQL**。
@@ -51,7 +51,7 @@ MCP   http://127.0.0.1:8765/mcp
 
 ```bash
 cargo build --release
-./target/release/memory-kb
+./target/release/MCP-DM
 ```
 
 静态构建（推荐，产物无 glibc 依赖）：
@@ -72,9 +72,9 @@ macOS：不提供预编译产物，需本地 `cargo build`（`postgresql_embedde
 一个参数同时表达「绑哪儿」和「谁能连」：
 
 ```bash
-BIND=10.0.0.0/8 ./memory-kb-linux-amd64    # 绑 0.0.0.0，仅放行内网 A 段
-BIND=10.0.1.123 ./memory-kb-linux-amd64    # 只绑这张网卡
-BIND=0.0.0.0/0  ./memory-kb-linux-amd64    # 不限制（公网暴露，谨慎）
+BIND=10.0.0.0/8 ./MCP-DM-linux-amd64    # 绑 0.0.0.0，仅放行内网 A 段
+BIND=10.0.1.123 ./MCP-DM-linux-amd64    # 只绑这张网卡
+BIND=0.0.0.0/0  ./MCP-DM-linux-amd64    # 不限制（公网暴露，谨慎）
 ```
 
 | 写法 | 绑定地址 | 允许来源 |
@@ -160,7 +160,7 @@ data/
 ## 架构
 
 ```
-memory-kb（单进程）
+MCP-DM（单进程）
 ├─ Actix-web        :8767   网页 + REST API
 ├─ rmcp + axum      :8765   MCP（POST /mcp）
 └─ PostgreSQL       子进程    Unix socket，随主进程启停

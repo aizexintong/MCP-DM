@@ -1,12 +1,12 @@
 [package]
-name = "memory-kb"
+name = "mcp-dm"
 version = "1.0.1"
 edition = "2021"
-description = "知识库：Actix-web + PostgreSQL(embedded)"
+description = "用于生成式 AI 的文档记忆系统"
 license = "MIT"
 
 [[bin]]
-name = "memory-kb"
+name = "MCP-DM"
 path = "src/main.rs"
 
 [dependencies]

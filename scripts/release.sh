@@ -68,10 +68,10 @@ cargo test --release --quiet
 # ---- 3. 改版本 ----
 sed -i "0,/^version = \".*\"/s//version = \"${NEW_VERSION}\"/" Cargo.toml
 # Cargo.lock 交给 cargo 自己同步，避免手改破坏结构
-cargo update -p memory-kb --precise "$NEW_VERSION" 2>/dev/null || cargo generate-lockfile --quiet
+cargo update -p mcp-dm --precise "$NEW_VERSION" 2>/dev/null || cargo generate-lockfile --quiet
 
 grep -m1 '^version' Cargo.toml
-grep -A1 'name = "memory-kb"' Cargo.lock | head -2
+grep -A1 'name = "mcp-dm"' Cargo.lock | head -2
 
 # ---- 4. 提交 + 打 tag ----
 git add Cargo.toml Cargo.lock

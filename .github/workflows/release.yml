@@ -22,7 +22,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  BIN_NAME: memory-kb
+  BIN_NAME: MCP-DM
 
 jobs:
   version:
@@ -151,7 +151,7 @@ jobs:
       - name: Verify static linking
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: |
-          BIN=memory-kb-linux-amd64
+          BIN=MCP-DM-linux-amd64
           file "$BIN"
 
           # musl 静态二进制 ldd 输出 "statically linked"；
@@ -200,13 +200,13 @@ jobs:
 
             Linux（静态，无依赖）
             ```bash
-            chmod +x memory-kb-linux-amd64
-            ./memory-kb-linux-amd64
+            chmod +x MCP-DM-linux-amd64
+            ./MCP-DM-linux-amd64
             ```
 
             Windows
             ```powershell
-            .\memory-kb-windows-amd64.exe
+            .\MCP-DM-windows-amd64.exe
             ```
 
             首次启动自动在 `./data/` 初始化数据库，无需预装 PostgreSQL。
@@ -216,9 +216,9 @@ jobs:
             启动后仅 `127.0.0.1` 可访问。局域网使用请指定 `BIND`：
 
             ```bash
-            BIND=10.0.0.0/8 ./memory-kb-linux-amd64    # 仅内网 A 段
-            BIND=10.0.1.123 ./memory-kb-linux-amd64    # 仅指定网卡
-            BIND=0.0.0.0/0  ./memory-kb-linux-amd64    # 不限制（谨慎）
+            BIND=10.0.0.0/8 ./MCP-DM-linux-amd64    # 仅内网 A 段
+            BIND=10.0.1.123 ./MCP-DM-linux-amd64    # 仅指定网卡
+            BIND=0.0.0.0/0  ./MCP-DM-linux-amd64    # 不限制（谨慎）
             ```
 
             | 写法 | 绑定 | 允许来源 |

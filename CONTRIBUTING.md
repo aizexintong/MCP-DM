@@ -178,6 +178,119 @@ Windows 交叉需要 mingw + `.cargo/config.toml` 指定 linker。
 
 不想触发就把改动标成 `[skip ci]`。
 
+
+---
+
+## 命名约定
+
+三个名字各管一段，改一处要连带改全部，否则产物名、服务名、文档会对不上。
+
+| 位置 | 值 | 作用 |
+|---|---|---|
+| `Cargo.toml` → `[package] name` | `mcp-dm` | **crate 名，必须全小写**，Rust 不允许大写 |
+| `Cargo.toml` → `[[bin]] name` | `MCP-DM` | **产物文件名**，打包后的可执行文件就叫这个 |
+| `Cargo.lock` → `[[package]] name` | `mcp-dm` | 与 package 一致 |
+
+产物路径：
+```
+target/release/MCP-DM                     Linux glibc
+target/x86_64-unknown-linux-musl/release/MCP-DM    Linux 静态
+target/x86_64-pc-windows-gnu/release/MCP-DM.exe    Windows
+```
+
+### 改名要同步的地方
+
+```bash
+grep -rn "MCP-DM\|memory-kb" \
+  Cargo.toml Cargo.lock \
+  .github/workflows/release.yml \
+  scripts/release.sh \
+  README.md AGENTS.md CONTRIBUTING.md
+```
+
+清单：
+
+- [ ] `Cargo.toml` 的 `[package] name`（小写）
+- [ ] `Cargo.toml` 的 `[[bin]] name`（可大写）
+- [ ] `Cargo.lock` 的 `[[package]] name`
+- [ ] `.github/workflows/release.yml` 的 `env.BIN_NAME`
+- [ ] `scripts/release.sh` 里的 `cargo update -p <name>`
+- [ ] 三份文档里的可执行命令
+- [ ] 本机 systemd 的 `ExecStart`
+- [ ] Release 附件命名
+
+---
+
+## 构建期版本注入
+
+`build.rs` 把版本号写进 `env!("APP_VERSION")`：
+
+```
+本地构建   取 Cargo.toml 的 version
+CI 构建    取 BUILD_VERSION 环境变量（由 git tag 推导）
+```
+
+好处：**CI 不需要修改任何文件就能打出正确版本**，仓库历史里不会出现机器提交
+（否则 Contributors 列表会多出一个 `github-actions[bot]`）。
+
+验证：
+```bash
+BUILD_VERSION=9.9.9 cargo build --release
+./target/release/MCP-DM     # 启动日志第一行应显示 v9.9.9
+```
+
+---
+
+## 踩过的坑（都是真出过的问题）
+
+| 现象 | 根因 | 修法 |
+|---|---|---|
+| CI 全程失败，报 Cargo.lock 解析错 | rebase 冲突标记 `<<<<<<<` 被提交进 `Cargo.lock` | 别手改 lock；`cargo update` 或删掉重新生成 |
+| Linux 构建失败：不是静态链接 | musl 静态包的 `ldd` 输出是 `statically linked`，而检查找的是 `not a dynamic executable` | 判断输出里有没有 `=>`，不依赖措辞 |
+| CI 报源码有警告但本地没有 | 门禁 `grep "^warning:"` 连依赖 crate 的警告也算 | 加 `grep -A2 ... \| grep "--> src/"` 限定本项目 |
+| 改了前端页面没变化 | 资源是 `include_str!` 编译期内嵌 | 必须 `cargo build` 重启，光刷浏览器没用 |
+| `sort` 参数怎么调都没用 | `ORDER BY` 硬编码在 SQL 里，`sort` 变量算了但没用上 | 白名单生成排序子句，`format!` 拼进 SQL |
+| 设 `BIND=10.0.0.0/8` 后本机 curl 403 | 回环地址不在网段白名单里 | `permits()` 里回环直接放行 |
+| `/8` 显示成 `/24` | `(!mask).leading_zeros()` 算的是前导零 | 改用 `mask.count_ones()` |
+| 删分类后条目失踪 | 兜底分类路径散落 4 处硬编码 | 提成 `FALLBACK_CATEGORY` 常量 |
+| 收藏/精选只有一个按钮 | `mark_level = (n+1) % 4` 循环 | 拆成两个独立开关 + 点赞 |
+| 编辑器滚不动 | `x-data` 嵌套覆盖了外层作用域，按钮全失效 | 状态和方法放在同一个 `x-data` 里 |
+| 页面底部按钮看不见 | 操作放在内容末尾 | 改成吸顶工具条 `position: sticky` |
+| 深色模式露出白块 | 组件用了硬编码 `rgba(255,255,255,.7)` | 全部改 CSS 变量，暗色只改变量值 |
+
+---
+
+## 排查手法
+
+**别猜，去测。** 这个项目踩的坑里，一半是「以为改好了其实没生效」。
+
+前端用无头浏览器验证：
+
+```js
+const { chromium } = require('playwright-core');
+const p = await (await br.newContext({ viewport:{width:1600,height:950} })).newPage();
+await p.goto('http://127.0.0.1:8767/entry/2', { waitUntil:'networkidle' });
+// 测量真实布局，不要凭截图猜
+const m = await p.evaluate(() => {
+  const el = document.querySelector('.editor');
+  const r = el.getBoundingClientRect();
+  return { h: Math.round(r.height), overflow: getComputedStyle(el).overflowY };
+});
+```
+
+后端直接打接口看真实返回，不要读代码推测：
+
+```bash
+curl -s http://127.0.0.1:8767/api/list | python3 -m json.tool | head -20
+curl -s "http://127.0.0.1:8767/api/search?sort=newest&limit=3"
+```
+
+确认二进制版本是不是线上那一份：
+
+```bash
+grep "MCP-DM v" /data/projects/memory/logs/kb.log | tail -1
+```
+
 ---
 
 ## 检查清单

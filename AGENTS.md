@@ -26,18 +26,18 @@ MCP-DM 是一个自托管的知识库服务器，提供 **MCP 工具**给 AI 使
 
 | 平台 | 文件 |
 |---|---|
-| Linux x86_64（静态，推荐） | `memory-kb-linux-amd64` |
-| Windows x86_64 | `memory-kb-windows-amd64.exe` |
+| Linux x86_64（静态，推荐） | `MCP-DM-linux-amd64` |
+| Windows x86_64 | `MCP-DM-windows-amd64.exe` |
 
 ```bash
 # Linux
-chmod +x memory-kb-linux-amd64
-./memory-kb-linux-amd64
+chmod +x MCP-DM-linux-amd64
+./MCP-DM-linux-amd64
 ```
 
 ```powershell
 # Windows
-.\memory-kb-windows-amd64.exe
+.\MCP-DM-windows-amd64.exe
 ```
 
 首次启动自动初始化数据库到 `./data/`，**无需预装 PostgreSQL**。
@@ -48,7 +48,7 @@ chmod +x memory-kb-linux-amd64
 git clone https://github.com/aizexintong/MCP-DM.git
 cd MCP-DM
 cargo build --release
-./target/release/memory-kb
+./target/release/MCP-DM
 ```
 
 > macOS 用户：`postgresql_embedded` 缺 macOS 预编译包，需要本地已装 PostgreSQL
@@ -400,10 +400,10 @@ body:
 
 ```bash
 # systemd 部署
-journalctl -u memory-kb -n 50 -f
+journalctl -u MCP-DM -n 50 -f
 
 # 直接运行
-RUST_LOG=debug ./memory-kb
+RUST_LOG=debug ./MCP-DM
 ```
 
 ---
@@ -438,7 +438,7 @@ curl -s -X POST $URL \
 ### Linux (systemd)
 
 ```ini
-# /etc/systemd/system/memory-kb.service
+# /etc/systemd/system/mcp-dm.service
 [Unit]
 Description=MCP-DM Knowledge Base
 After=network.target
@@ -450,7 +450,7 @@ WorkingDirectory=/opt/mcp-dm
 Environment=DATA_DIR=/opt/mcp-dm/data
 Environment=MCP_PORT=8765
 Environment=WEB_PORT=8767
-ExecStart=/opt/mcp-dm/memory-kb
+ExecStart=/opt/mcp-dm/MCP-DM
 Restart=always
 RestartSec=5
 KillMode=mixed
@@ -462,8 +462,8 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now memory-kb
-sudo systemctl status memory-kb
+sudo systemctl enable --now MCP-DM
+sudo systemctl status MCP-DM
 ```
 
 > `User=` 不能是 root，PostgreSQL 拒绝以 root 运行。
@@ -473,7 +473,7 @@ sudo systemctl status memory-kb
 用 [NSSM](https://nssm.cc/) 或任务计划程序注册为服务：
 
 ```powershell
-nssm install MCP-DM "C:\mcp-dm\memory-kb.exe"
+nssm install MCP-DM "C:\mcp-dm\MCP-DM.exe"
 nssm set MCP-DM AppEnvironmentExtra DATA_DIR=C:\mcp-dm\data
 nssm start MCP-DM
 ```
