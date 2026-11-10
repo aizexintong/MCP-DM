@@ -151,13 +151,20 @@ jobs:
       - name: Verify static linking
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: |
-          if ldd "memory-kb-linux-amd64" 2>&1 | grep -q "not a dynamic executable"; then
-            echo "静态链接 OK"
-          else
-            echo "::error::不是静态链接"
-            ldd "memory-kb-linux-amd64" || true
+          BIN=memory-kb-linux-amd64
+          file "$BIN"
+
+          # musl 静态二进制 ldd 输出 "statically linked"；
+          # glibc 动态二进制会列出 "=> /lib/..." 依赖。
+          # 用「是否出现 => 」判断最稳，不依赖具体措辞。
+          LDD_OUT=$(ldd "$BIN" 2>&1 || true)
+          echo "$LDD_OUT"
+
+          if echo "$LDD_OUT" | grep -q "=>"; then
+            echo "::error::存在动态依赖，不是静态链接"
             exit 1
           fi
+          echo "静态链接 OK（无动态依赖）"
 
       - uses: actions/upload-artifact@v4
         with:
