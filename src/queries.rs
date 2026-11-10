@@ -18,6 +18,13 @@ const W_TRIGRAM: f64 = 0.4;
 /// 标记加成：每条收藏/精选提升的分数比例
 const MARK_BOOST: f64 = 0.5;
 
+/// 状态权重：过时内容不该盖过现行内容
+///
+/// 不标 obsolete 就没法在检索里降权，所以「标记时效」和「排序」是一套东西。
+const W_STATE_CURRENT: f64 = 1.0;
+const W_STATE_ARCHIVED: f64 = 0.7;
+const W_STATE_OBSOLETE: f64 = 0.3;
+
 /// 列出分类 + 该分类直属的条目（一次取全，前端不再二次请求）
 pub async fn list_tree(pool: &PgPool) -> Result<Vec<serde_json::Value>> {
     let rows: Vec<(String, String, i32, i64)> = sqlx::query_as(
@@ -173,8 +180,18 @@ pub async fn search(
         )
         SELECT
             id, title, cat_path, cause, effect, state, mark_level, updated_at,
-            (base_score * (1.0 + {MARK_BOOST} * mark_level))::real AS final_score,
-            (base_score * (1.0 + {MARK_BOOST} * mark_level))::real AS score,
+            (base_score * (1.0 + {MARK_BOOST} * mark_level)
+              * (CASE state
+                   WHEN 'current'  THEN {W_STATE_CURRENT}
+                   WHEN 'archived' THEN {W_STATE_ARCHIVED}
+                   ELSE                 {W_STATE_OBSOLETE}
+                 END))::real AS final_score,
+            (base_score * (1.0 + {MARK_BOOST} * mark_level)
+              * (CASE state
+                   WHEN 'current'  THEN {W_STATE_CURRENT}
+                   WHEN 'archived' THEN {W_STATE_ARCHIVED}
+                   ELSE                 {W_STATE_OBSOLETE}
+                 END))::real AS score,
             LEFT(body, 200) AS snippet
         FROM scored
         ORDER BY {order_by}
