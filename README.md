@@ -16,7 +16,8 @@
 - **零外部依赖**：CSS / JS / 前端库全部编译期内嵌，运行时不读文件、不连远程
 - **默认只监听本机**：`BIND` 参数控制放行范围，从单机到内网一键切换
 - **结构化的因果记录**：每条含 `起因 / 结果 / 分类 / 标签`，不是纯文本堆砌
-- **检索而非搜索**：PostgreSQL `tsvector` 全文 + `pg_trgm` 模糊相似度混合打分
+- **混合检索**：`tsvector` 全文 + `pg_trgm` 模糊 + 子串匹配三级打分，中文短词也能搜到
+- **时效感知**：`current` / `archived` / `obsolete` 参与排序权重，过时内容自动沉底
 - **分层分类**：`ltree` 三级树，标识英文、名称中文
 - **数据可搬迁**：`data/` 目录打包即走，不用重装数据库
 
@@ -148,6 +149,87 @@ data/
 
 ---
 
+## 检索是怎么打分的
+
+分数 = `base_score × (1 + 0.5 × mark_level) × state_weight`
+
+### base_score：两个分支取较高者
+
+```
+base_score = GREATEST(
+    ts_rank(search_vec, ...) × 0.6                    ← 全文
+  + GREATEST(similarity(title/cause/effect)) × 0.4,   ← 模糊（与上一项相加）
+    CASE position($1 in ...)                          ← 子串（独立分支）
+      WHEN title  THEN 1.0
+      WHEN cause  THEN 0.7
+      WHEN effect THEN 0.7
+      WHEN body   THEN 0.4
+    END
+)
+```
+
+一句话：**全文和模糊相加**成一个分支，**子串是另一个分支**，两者取较高值。
+
+| 匹配方式 | 权重 | 擅长什么 |
+|---|---|---|
+| `tsvector` 全文 | 0.6 | 英文单词、已分词的短语 |
+| `pg_trgm` 相似度 | 0.4 | 拼写近似、错别字 |
+| **子串匹配** | **1.0 / 0.7 / 0.4** | **中文短词**（标题 / 因果 / 正文） |
+
+数值定义在 `src/queries.rs` 顶部，改权重只改那里：
+
+```rust
+const W_FULLTEXT: f64 = 0.6;
+const W_TRIGRAM: f64 = 0.4;
+const W_SUBSTR_TITLE: f64 = 1.0;
+const W_SUBSTR_FIELD: f64 = 0.7;
+const W_SUBSTR_BODY: f64 = 0.4;
+const MARK_BOOST: f64 = 0.5;
+const W_STATE_CURRENT: f64 = 1.0;
+const W_STATE_ARCHIVED: f64 = 0.7;
+const W_STATE_OBSOLETE: f64 = 0.3;
+```
+
+### 为什么需要子串匹配
+
+PostgreSQL 的 `simple` 分词器**不切中文词**：
+
+```sql
+plainto_tsquery('simple', '排错')   →  '排错':1
+search_vec 实际内容                  →  '预设配置排错':3
+```
+
+两者对不上。而 `pg_trgm` 对「短查询词 vs 长文本」的相似度又低于 0.3 阈值。
+
+所以中文检索实际是靠 `position($1 in title)` 这类子串匹配撑起来的。
+代价是数据量大时比索引慢，但准确性对中文来说比速度重要。
+
+> 想彻底解决，需要装 `zhparser` / `pg_jieba` 这类中文分词扩展。
+> 本项目选择零外部依赖，所以用子串匹配换取正确性。
+
+### state 权重
+
+| 状态 | 权重 | 含义 |
+|---|---|---|
+| `current` | 1.0 | 现行有效 |
+| `archived` | 0.7 | 当时正确，现在只是历史 |
+| `obsolete` | 0.3 | 依据已失效 |
+
+**不标 `obsolete`，过时内容就会盖住现行内容。** 这是实际踩过的坑：
+搜「DSH 预设」时，标了过时的旧配置排在现行条目前面。
+
+所以「标记时效」和「检索质量」是一件事。
+
+### 排序参数
+
+| `sort` | 效果 |
+|---|---|
+| `relevance`（默认） | 综合分数 |
+| `newest` | 按更新时间 |
+| `marked` | 收藏 / 精选优先 |
+
+---
+
 ## 技术栈
 
 | 层 | 选型 |
@@ -184,6 +266,51 @@ git push origin main --follow-tags
 ```
 
 推 tag 后 GitHub Actions 自动构建 linux-amd64（静态）+ windows-amd64 并发布 Release。
+
+---
+
+## 已知限制
+
+按影响程度排序。
+
+### 中文检索靠子串匹配
+
+没有中文分词扩展，短词检索走 `position()` 子串匹配。数据量上万后可能变慢。
+彻底解决需要 `zhparser` / `pg_jieba`，与「零外部依赖」冲突，暂不引入。
+
+### 历史正文是「伪 Markdown」
+
+早期导入的 `body` 是纯文本 + 双空格对齐的表格，`marked.js` 会渲染成普通段落。
+转成真正的 Markdown 需要一个一次性迁移脚本，目前未做。
+
+### `links` 表没有维护入口
+
+条目之间的引用关系只在导入时建立过。编辑正文时不会重建 `links`，
+所以「相关条目」可能不全。
+
+### 无鉴权
+
+没有登录、没有 API Key。`BIND` 默认只监听 `127.0.0.1`，
+放到局域网是「信任内网」模型，不是「认证」模型。
+
+### 无并发覆盖保护
+
+两个客户端同时编辑同一条目，后写的会覆盖先写的。
+缺 `updated_at` 乐观锁。
+
+### 前端无分页
+
+首页和时间线一次拉全量。接近千条时会明显卡顿。
+
+### 静态资源无指纹
+
+`/static/{path}` 带 `Cache-Control: no-cache, must-revalidate`，
+每次都要回源验证。改前端必须 `cargo build` 重启（资源是编译期内嵌的）。
+
+### macOS 无预编译产物
+
+`postgresql_embedded` 缺 macOS 包，CI 也不做 Apple SDK 交叉编译。
+macOS 用户需从源码构建，且本机要有 PostgreSQL。
 
 ---
 

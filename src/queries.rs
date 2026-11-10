@@ -18,6 +18,15 @@ const W_TRIGRAM: f64 = 0.4;
 /// 标记加成：每条收藏/精选提升的分数比例
 const MARK_BOOST: f64 = 0.5;
 
+/// 子串命中权重：中文短词主要靠这个
+///
+/// `simple` 分词器不切中文词，`plainto_tsquery('simple','排错')` 匹配不到
+/// 标题为「DSH 预设配置排错」的条目；`pg_trgm` 对短词 vs 长文本相似度也低于阈值。
+/// 所以中文检索实际上是靠 `position()` 子串匹配撑起来的。
+const W_SUBSTR_TITLE: f64 = 1.0;
+const W_SUBSTR_FIELD: f64 = 0.7;
+const W_SUBSTR_BODY: f64 = 0.4;
+
 /// 状态权重：过时内容不该盖过现行内容
 ///
 /// 不标 obsolete 就没法在检索里降权，所以「标记时效」和「排序」是一套东西。
@@ -160,19 +169,38 @@ pub async fn search(
                 e.id, e.title, e.cat_path::text AS cat_path, e.body, e.cause, e.effect,
                 e.state, e.mark_level, e.updated_at,
                 (CASE WHEN $1 = '' THEN 0 ELSE
-                    ts_rank(e.search_vec, plainto_tsquery('simple', $1)) * {W_FULLTEXT}
-                    + GREATEST(
-                        similarity(e.title, $1),
-                        similarity(e.cause, $1),
-                        similarity(e.effect, $1)
-                      ) * {W_TRIGRAM}
+                    GREATEST(
+                        -- 全文匹配
+                        ts_rank(e.search_vec, plainto_tsquery('simple', $1)) * {W_FULLTEXT}
+                        + GREATEST(
+                            similarity(e.title, $1),
+                            similarity(e.cause, $1),
+                            similarity(e.effect, $1)
+                          ) * {W_TRIGRAM},
+                        -- 子串命中：标题最重，正文最轻
+                        CASE
+                            WHEN position($1 in e.title)  > 0 THEN {W_SUBSTR_TITLE}
+                            WHEN position($1 in e.cause)  > 0 THEN {W_SUBSTR_FIELD}
+                            WHEN position($1 in e.effect) > 0 THEN {W_SUBSTR_FIELD}
+                            WHEN position($1 in e.body)   > 0 THEN {W_SUBSTR_BODY}
+                            ELSE 0
+                        END
+                    )
                 END) AS base_score
             FROM entries_full e
             WHERE
                 -- $1 为空时只按分类/状态筛选，不做全文匹配
                 ($1 = ''
+                 -- 全文：英文与已分词内容
                  OR e.search_vec @@ plainto_tsquery('simple', $1)
-                 OR e.title % $1 OR e.cause % $1 OR e.effect % $1 OR e.body % $1)
+                 -- 模糊：拼写近似
+                 OR e.title % $1 OR e.cause % $1 OR e.effect % $1 OR e.body % $1
+                 -- 子串：中文靠这条。simple 分词器不切中文词，
+                 -- 全文匹配不到短词；trigram 对「短词 vs 长文本」相似度又太低
+                 OR position($1 in e.title)  > 0
+                 OR position($1 in e.cause)  > 0
+                 OR position($1 in e.effect) > 0
+                 OR position($1 in e.body)   > 0)
                 AND ($2::ltree IS NULL OR e.cat_path <@ $2::ltree)
                 AND ($3::bigint IS NULL OR e.updated_at > now() - ($3 || ' days')::interval)
                 AND ($4::text IS NULL OR e.state = $4)
