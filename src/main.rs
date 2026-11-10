@@ -52,9 +52,10 @@ async fn main() -> Result<()> {
     });
 
     let listen = cfg.bind.listen;
-    tracing::info!("访问控制: {}", cfg.bind.describe());
+    tracing::info!("监听地址: {}", cfg.bind.describe());
     tracing::info!("Web  http://{}:{}", listen, cfg.web_port);
     tracing::info!("MCP  http://{}:{}/mcp", listen, cfg.mcp_port);
+    tracing::info!("数据目录: {}", cfg.data_dir.display());
 
     // 保持 database 存活（PG 进程）
     let _keep = database;
