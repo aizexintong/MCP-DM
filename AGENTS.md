@@ -122,34 +122,59 @@ claude mcp add --transport http memory http://127.0.0.1:8765/mcp
 
 ### 3.3 DSH（DeepSeek Harness）
 
-**最简单的方式**：只在 profile 顶层挂 MCP 客户端，不需要写预设。
+DSH 的配置走 profile 补丁层：`~/.dsh/profiles/web/cordis.patch.yml`。
 
-`~/.dsh/profiles/web/cordis.patch.yml`：
+**最容易犯的错**是把「按 id 覆盖」当成「插入新条目」。配置树里本来没有 `mcp-memory` 这行，
+写覆盖就永远不生效，还会每次启动刷一条警告。
 
 ```yaml
+# ❌ 错误：这是「覆盖已有条目」，但树里没有 mcp-memory
 - id: mcp-memory
   name: '@deepseek-ai/dsh-mcp-client'
-  config:
-    serverName: memory
-    transport: streamable-http
-    url: http://127.0.0.1:8765/mcp
-    toolCallTimeoutMs: 30000
-    failOnStartupError: false
-    reconnect:
-      enabled: true
-      initialDelayMs: 1000
-      maxAttempts: 20
+  config: { serverName: memory, ... }
+
+# 启动时警告：
+# patch: entry "mcp-memory" not found
 ```
 
-**进阶：做成 Agent 预设**，把 MCP 和「开场必查」的规则绑在一起，新会话自动生效。
-下面这份是可直接用的完整配置，语法坑都在注释里标了：
+```yaml
+# ✅ 正确：用 - insert: 才是新增
+- insert:
+    - id: mcp-memory
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: memory
+        transport: streamable-http
+        url: http://127.0.0.1:8765/mcp
+        toolCallTimeoutMs: 30000
+        failOnStartupError: false    # 服务没起也不阻塞启动
+        reconnect:
+          enabled: true
+          initialDelayMs: 1000
+          maxAttempts: 20
+```
+
+#### 全局挂载 vs 预设内挂载：二选一，不能同时
+
+| 方案 | 效果 | 代价 |
+|---|---|---|
+| **全局**（上面的 `- insert:`） | 所有会话都有 `mcp__memory__*` | 无 |
+| **预设内**（放进 preset 的 `config.plugins`） | 只有选该预设的会话才有 | 用户忘了选就没有 |
+
+**两个同时挂会撞车**：`serverName: memory` 重复，工具重复注册。
+
+**推荐全局**。理由：知识库要随时可查，不该依赖用户记得选预设。预设里只保留 persona 规则。
+
+#### 想做成 Agent 预设
+
+把「开场必查」的规则和 MCP 绑在一起，新会话自动加载。预设本身也要用 `- insert:` 包：
 
 ```yaml
 - insert:
     - id: preset-memory
       name: '@deepseek-ai/dsh-agent-preset'
       config:
-        id: memory-first              # 会话里保存的预设标识
+        id: memory-first              # 会话里保存的标识
         name: 记忆库优先               # 界面上显示的名字
         description: 每次开场先查知识库
         order: 0                      # 排在其他预设前面
@@ -164,17 +189,11 @@ claude mcp add --transport http memory http://127.0.0.1:8765/mcp
                 1. 开场必查，不查等于重复劳动
                 2. status: no_seed 就问人，不要编
                 3. 先看 state：current 采信，archived 只说明当时状态，obsolete 不要引用
+                记录时用 mem_add，必须填 cause 和 effect。
           - id: agent-instructions
             name: '@deepseek-ai/dsh-agent-instructions'
             config:
               maxBytes: 65536
-          - id: mcp-memory-server
-            name: '@deepseek-ai/dsh-mcp-client'
-            config:
-              serverName: memory
-              transport: streamable-http
-              url: http://127.0.0.1:8765/mcp
-              failOnStartupError: false
           - id: tool-bash
             name: '@deepseek-ai/dsh-tool-bash'
           - id: tool-fs
@@ -187,16 +206,26 @@ claude mcp add --transport http memory http://127.0.0.1:8765/mcp
             name: '@deepseek-ai/dsh-skill-filesystem'
           - id: tool-skill
             name: '@deepseek-ai/dsh-tool-skill'
+          - id: command-goal
+            name: '@deepseek-ai/dsh-command-goal'
+          - id: tool-goal
+            name: '@deepseek-ai/dsh-tool-goal'
 
-          # 分组插件必须这么写，三处细节缺一不可
+          # ── 分组插件：三处细节缺一不可 ──────────────────────────
+          # name 必须是 cordis:group（不是包名）
+          # group: true 必须写
+          # 子插件放 config: 下，是数组，字段名不是 plugins
           - id: planning
-            name: cordis:group           # 固定字符串，不是包名
-            group: true                   # 必须
+            name: cordis:group
+            group: true
             isolate:
-              planMode: true              # 声明要隔离的服务
-            config:                       # 子插件放这里，是数组
+              planMode: true
+            config:
               - id: plan-mode
                 name: '@deepseek-ai/dsh-plan-mode'
+                config:
+                  section: |                    # 必填，非空提示词，照抄标准预设
+                    You are in plan mode. Explore first, do not mutate...
 
           - id: compaction
             name: cordis:group
@@ -213,6 +242,8 @@ claude mcp add --transport http memory http://127.0.0.1:8765/mcp
                 name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
                 config:
                   thresholdChars: 8192
+                  headChars: 4096
+                  tailChars: 1024
 
           - id: delegation
             name: cordis:group
@@ -236,36 +267,62 @@ claude mcp add --transport http memory http://127.0.0.1:8765/mcp
                   provider: fork
                   toolName: subagent_fork
                   backgroundMode: continuable
+              # workflow-ptc 必须和 tool-workflow 成对出现。
+              # 只挂 tool-workflow 会报 waiting for workflowEngine 加载失败。
+              - id: workflow-ptc
+                name: '@deepseek-ai/dsh-workflow-ptc'
+                config:
+                  provider: spawn
+              - id: tool-workflow
+                name: '@deepseek-ai/dsh-tool-workflow'
 
           - id: tool-ask-user
             name: '@deepseek-ai/dsh-tool-ask-user'
           - id: tool-todo
             name: '@deepseek-ai/dsh-tool-todo'
             config:
-              allowParallelInProgress: true   # 必填，漏了会启动失败
+              allowParallelInProgress: true     # 必填，漏了启动失败
           - id: tool-web
             name: '@deepseek-ai/dsh-tool-web'
+            config:
+              fetch: true
+              searchTimeoutMs: 60000
           - id: present
             name: '@deepseek-ai/dsh-tool-present'
 ```
 
-#### 预设加载失败的三种典型报错
+#### 逐个报错对照表
 
-| 报错 | 原因 | 修法 |
+都是实际踩过的，按出现顺序。
+
+| 报错 | 根因 | 修法 |
 |---|---|---|
-| `X (cordis:group): Cannot read properties of undefined (reading 'map')` | 分组插件写成了 `plugins:` 或用了不存在的包名 | 用 `name: cordis:group` + `group: true` + `config:` 数组 |
-| `tool-todo: invalid config: $.allowParallelInProgress missing required value` | 缺必填项 | 加 `allowParallelInProgress: true` |
-| `Cannot find module '@deepseek-ai/dsh-xxx'` | 包名写错 | 对照 `node_modules/@deepseek-ai/dsh-web-app/presets/standard.patch.yml` |
+| `patch: entry "mcp-memory" not found` | 用了「按 id 覆盖」写法 | 改成 `- insert:` 包裹 |
+| `X (cordis:group): Cannot read properties of undefined (reading 'map')` | 分组写成 `plugins:`，或用了不存在的包名 | `name: cordis:group` + `group: true` + 子项放 `config:` |
+| `tool-todo: invalid config: $.allowParallelInProgress missing required value` | 缺必填项 | `config: { allowParallelInProgress: true }` |
+| `plan-mode: PlanModeConfig needs a non-empty section` | 缺提示词正文 | 从标准预设复制整段 `section` |
+| `tool-workflow: waiting for workflowEngine` | `workflow-ptc` 没一起挂 | 两者成对出现 |
+| `Cannot find module '@deepseek-ai/dsh-xxx'` | 包名写错 | 对照标准预设 |
 
-**最可靠的办法**：打开官方标准预设逐项对照
+**最容易写错的包名**：
 
-```bash
-cat node_modules/@deepseek-ai/dsh-web-app/presets/standard.patch.yml
+| 错的 | 对的 |
+|---|---|
+| `@deepseek-ai/dsh-compaction` | 不存在，用 `cordis:group` 分组 |
+| `@deepseek-ai/dsh-planning` | 不存在，用 `cordis:group` 分组 |
+| `@deepseek-ai/dsh-tool-result-pruner` | `@deepseek-ai/dsh-compaction-tool-result-pruner` |
+| `@deepseek-ai/dsh-present` | `@deepseek-ai/dsh-tool-present` |
+
+#### 复制标准预设片段时注意缩进
+
+从 `standard.patch.yml` 抠出来的片段是 10 空格缩进，放进 `config:` 下要变成 14 空格，
+**每一行都要 +4**。只改第一行会让 YAML 直接坏掉：
+
+```
+yaml.scanner.ScannerError: mapping values are not allowed here
 ```
 
-#### 另一个会挡住预设加载的问题
-
-如果启动时看到：
+#### image-offload 重复注册（另一个会挡住加载的问题）
 
 ```
 dsh: warning: 1 entry did not activate
@@ -273,14 +330,41 @@ image-offload (@deepseek-ai/dsh-compaction-image-offload): Error:
 session message projection "image/offload" is already registered
 ```
 
-说明有别的插件抢先注册了 `image/offload` 投影。查：
+有第三方插件自己注册了 `image/offload` 投影。它先注册成功，核心插件后注册时抛错，
+导致**核心整个加载失败**。原作者写 `try/catch` 吞不掉——炸的是核心那一侧。
 
 ```bash
 grep -rn "image/offload" ~/.dsh/profiles/*/node_modules/*/index.js
 ```
 
-找到那个重复注册的插件，把它的 `registerMessageProjection` 调用删掉——投影由核心提供，
-它只负责 append 事件就够了。`try/catch` 不管用，因为它先注册、核心后注册时炸的是核心。
+找到那个插件，删掉它的 `registerMessageProjection` 调用。投影由核心提供，它只需 append 事件。
+
+#### 改完怎么验证（别靠重启猜）
+
+```bash
+# 1. 离线自检，不启服务
+dsh --profile web --dump-config > /tmp/dump.yml 2>/tmp/dump.err
+cat /tmp/dump.err
+# 必须为空。若仍有 "entry ... not found"，说明写法还是覆盖而非 insert
+
+# 2. 确认真的进了配置树
+grep -n "mcp-memory" /tmp/dump.yml
+
+# 3. 重启后看启动日志
+#    不能有 "1 entry did not activate"
+#    界面预设列表应显示名字，不是「加载失败」
+
+# 4. 工具真能调
+#    在会话里调 mem_stats，返回 JSON 就通了
+```
+
+#### 改动的注意事项
+
+- `cordis.patch.yml` 由 `dsh-hmr` 热监听，改完刷新页面即可，不用重启服务
+- **有并发风险**：Web 的预设编辑器也会写这个文件。改前先 `cp` 备份，改后 `diff` 确认没覆盖别人的行
+- **不要**手写 profile 目录的 `package.json`
+- **不要**在该目录跑 `pnpm`
+- 装包走 `plugin_manager`
 
 ### 3.4 验证连接
 
