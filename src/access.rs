@@ -105,12 +105,17 @@ impl BindPolicy {
     }
 
     /// 来源是否允许
+    ///
+    /// 回环地址永远放行——本机访问不构成风险，
+    /// 否则设了 `10.0.0.0/8` 之后本机 curl 会被自己的策略挡住。
     pub fn permits(&self, addr: &SocketAddr) -> bool {
+        if addr.ip().is_loopback() {
+            return true;
+        }
         let Some(list) = &self.allow else { return true };
         match addr.ip() {
             IpAddr::V4(v4) => list.iter().any(|c| c.contains(v4)),
-            // IPv6 只放行回环（本机自测）
-            IpAddr::V6(v6) => v6.is_loopback(),
+            IpAddr::V6(_) => false,
         }
     }
 
@@ -122,8 +127,7 @@ impl BindPolicy {
                 let nets: Vec<String> = list
                     .iter()
                     .map(|c| {
-                        let bits = (!c.mask).leading_zeros();
-                        let len = 32 - bits;
+                        let len = c.mask.count_ones();
                         let ip = Ipv4Addr::from(c.net);
                         format!("{ip}/{len}")
                     })
@@ -194,7 +198,15 @@ mod tests {
         assert!(p.permits(&sa("10.1.2.3:80")));
         assert!(p.permits(&sa("10.255.255.255:80")));
         assert!(!p.permits(&sa("192.168.1.1:80")));
-        assert!(!p.permits(&sa("127.0.0.1:80")));
+        // 回环永远放行
+        assert!(p.permits(&sa("127.0.0.1:80")));
+    }
+
+    #[test]
+    fn describe_shows_correct_prefix_len() {
+        let p = BindPolicy::parse("10.0.0.0/8").unwrap();
+        let d = p.describe();
+        assert!(d.contains("/8"), "掩码长度算错: {d}");
     }
 
     #[test]
