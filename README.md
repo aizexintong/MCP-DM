@@ -1,5 +1,9 @@
 # MCP-DM
 
+[![Release](https://github.com/aizexintong/MCP-DM/actions/workflows/release.yml/badge.svg)](https://github.com/aizexintong/MCP-DM/actions/workflows/release.yml)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
+![Platform](https://img.shields.io/badge/platform-linux%20%7C%20windows-lightgrey.svg)
+
 自托管的长期记忆 / 知识库。单个 Rust 二进制，同时提供 **Web 界面** 与 **MCP 服务**，数据存在**嵌入式 PostgreSQL** 里，整个数据目录可整体搬迁。
 
 > 给 AI 用的安装与工具手册在 [AGENTS.md](AGENTS.md)，改代码的规范在 [CONTRIBUTING.md](CONTRIBUTING.md)。
