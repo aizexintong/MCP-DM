@@ -25,6 +25,8 @@ async fn main() -> Result<()> {
     let cfg = Config::from_env();
     std::fs::create_dir_all(&cfg.data_dir)?;
 
+    tracing::info!("MCP-DM v{}", env!("APP_VERSION"));
+
     tracing::info!("数据目录: {}", cfg.data_dir.display());
     let database = db::Db::start(&cfg).await?;
     database.migrate().await?;

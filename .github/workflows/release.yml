@@ -4,12 +4,18 @@ name: Release
 # 这样提交历史里只有作者本人，不会出现 bot 或半成品提交。
 on:
   push:
+    branches: [main]
     tags: ['v*']
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
   workflow_dispatch:
     inputs:
-      tag:
-        description: '要构建的 tag（如 v1.0.1）'
-        required: true
+      bump:
+        description: '版本递增：patch / minor / major'
+        required: false
+        default: 'patch'
 
 permissions:
   contents: write
@@ -19,46 +25,59 @@ env:
   BIN_NAME: memory-kb
 
 jobs:
-  meta:
+  version:
+    name: 计算版本号
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.v.outputs.version }}
-      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.calc.outputs.version }}
+      tag: ${{ steps.calc.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
-      - name: Resolve version
-        id: v
+      - name: 从 tag 推导
+        id: calc
+        shell: bash
         run: |
           set -euo pipefail
-          if [ -n "${{ github.event.inputs.tag }}" ]; then
-            TAG="${{ github.event.inputs.tag }}"
-          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            TAG="${GITHUB_REF_NAME}"
-          else
-            VER=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
-            TAG="v$VER"
+
+          # a) 推的是 tag：直接用它
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            echo "→ 按标签发布 ${GITHUB_REF_NAME}"
+            exit 0
           fi
-          case "$TAG" in
-            v*) VERSION="${TAG#v}" ;;
-            *)  VERSION="$TAG"; TAG="v$TAG" ;;
+
+          # b) 当前提交已带 v* 标签 → 交给 tag 事件，避免重复发布
+          if git tag --points-at HEAD | grep -q '^v'; then
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "version=" >> "$GITHUB_OUTPUT"
+            echo "当前提交已带标签，跳过（由 tag 事件负责）"
+            exit 0
+          fi
+
+          # c) 取最后一个 v* 标签，patch +1
+          BUMP='${{ github.event.inputs.bump }}'
+          [ -z "$BUMP" ] && BUMP=patch
+          LAST=$(git tag -l 'v*' --sort=-v:refname | head -n1)
+          [ -z "$LAST" ] && LAST='v1.0.0'
+          base="${LAST#v}"
+          IFS='.' read -r major minor patch <<< "$base"
+          case "$BUMP" in
+            major) major=$((major+1)); minor=0; patch=0 ;;
+            minor) minor=$((minor+1)); patch=0 ;;
+            *)     patch=$((patch+1)) ;;
           esac
-          echo "版本: $VERSION  tag: $TAG"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
-
-      - name: Verify Cargo.toml matches tag
-        run: |
-          set -euo pipefail
-          CV=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
-          if [ "$CV" != "${{ steps.v.outputs.version }}" ]; then
-            echo "::error::Cargo.toml ($CV) 与 tag (${{ steps.v.outputs.version }}) 不一致"
-            echo "先跑 scripts/release.sh 递增版本并提交，再打 tag"
-            exit 1
-          fi
+          TAG="v$major.$minor.$patch"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$major.$minor.$patch" >> "$GITHUB_OUTPUT"
+          echo "→ 上次 $LAST，本次 $TAG"
 
   build:
-    needs: meta
+    needs: version
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -109,6 +128,8 @@ jobs:
         run: cargo test --release --target ${{ matrix.target }}
 
       - name: Build
+        env:
+          BUILD_VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -o pipefail
           cargo build --release --target ${{ matrix.target }} 2>&1 | tee build.log
@@ -145,7 +166,7 @@ jobs:
           retention-days: 7
 
   release:
-    needs: [meta, build]
+    needs: [version, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -161,8 +182,8 @@ jobs:
       - name: Publish
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.meta.outputs.tag }}
-          name: ${{ needs.meta.outputs.tag }}
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: ${{ needs.version.outputs.tag }}
           draft: false
           prerelease: false
           generate_release_notes: true
@@ -224,7 +245,7 @@ jobs:
             不提供预编译产物。macOS 用户请从源码构建。
 
   verify:
-    needs: [meta, release]
+    needs: [version, release]
     runs-on: ubuntu-latest
     steps:
       - name: Check assets
@@ -232,7 +253,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TAG="${{ needs.meta.outputs.tag }}"
+          TAG="${{ needs.version.outputs.tag }}"
           gh release view "$TAG" --repo "${{ github.repository }}" \
             --json assets --jq '.assets[] | "\(.name)  \(.size) bytes"'
           N=$(gh release view "$TAG" --repo "${{ github.repository }}" \
